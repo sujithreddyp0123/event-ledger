@@ -37,6 +37,7 @@ class EventIn(BaseModel):
 
 
 def amount_to_cents(amount: Decimal) -> int:
+    # Store money as integer cents so balance-affecting values are deterministic.
     return int((amount * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
@@ -202,6 +203,9 @@ def create_app(
                 json=payload.model_dump(mode="json"),
             )
         except RuntimeError:
+            # Do not keep a local event unless the Account Service applied it;
+            # otherwise a retry with the same eventId would look like a duplicate
+            # even though the account balance was never updated.
             database.execute("DELETE FROM events WHERE event_id = ?", (payload.eventId,))
             database.commit()
             metrics["account_service_failures_total"] += 1

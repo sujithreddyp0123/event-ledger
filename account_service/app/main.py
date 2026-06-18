@@ -25,6 +25,7 @@ class TransactionIn(BaseModel):
 
 
 def amount_to_cents(amount: Decimal) -> int:
+    # Store money as integer cents so balance math never depends on binary floats.
     return int((amount * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
@@ -41,6 +42,23 @@ def row_to_transaction(row: Any) -> dict[str, Any]:
         "currency": row["currency"],
         "eventTimestamp": row["event_timestamp"],
         "metadata": json.loads(row["metadata_json"]) if row["metadata_json"] else None,
+    }
+
+
+def calculate_balance(database: Any, account_id: str) -> dict[str, str]:
+    rows = database.execute(
+        "SELECT type, amount_cents, currency FROM transactions WHERE account_id = ?",
+        (account_id,),
+    ).fetchall()
+    balance_cents = sum(
+        row["amount_cents"] if row["type"] == "CREDIT" else -row["amount_cents"]
+        for row in rows
+    )
+    currency = rows[0]["currency"] if rows else "USD"
+    return {
+        "accountId": account_id,
+        "balance": cents_to_amount(balance_cents),
+        "currency": currency,
     }
 
 
@@ -135,20 +153,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/accounts/{account_id}/balance")
     def get_balance(account_id: str, database=Depends(db)):
-        rows = database.execute(
-            "SELECT type, amount_cents, currency FROM transactions WHERE account_id = ?",
-            (account_id,),
-        ).fetchall()
-        balance_cents = sum(
-            row["amount_cents"] if row["type"] == "CREDIT" else -row["amount_cents"]
-            for row in rows
-        )
-        currency = rows[0]["currency"] if rows else "USD"
-        return {
-            "accountId": account_id,
-            "balance": cents_to_amount(balance_cents),
-            "currency": currency,
-        }
+        return calculate_balance(database, account_id)
 
     @app.get("/accounts/{account_id}")
     def get_account(account_id: str, database=Depends(db)):
@@ -156,7 +161,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
             "SELECT * FROM transactions WHERE account_id = ? ORDER BY event_timestamp DESC LIMIT 10",
             (account_id,),
         ).fetchall()
-        balance = get_balance(account_id, database)
+        balance = calculate_balance(database, account_id)
         return {
             "accountId": account_id,
             "balance": balance["balance"],

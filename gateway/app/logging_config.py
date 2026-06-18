@@ -3,6 +3,8 @@ import logging
 from contextvars import ContextVar
 from datetime import datetime, timezone
 
+# ContextVar keeps the current trace ID scoped to one async request instead of
+# leaking across concurrent requests handled by the same process.
 trace_id_ctx: ContextVar[str | None] = ContextVar("trace_id", default=None)
 
 
