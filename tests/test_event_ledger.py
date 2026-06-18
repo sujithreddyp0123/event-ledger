@@ -73,6 +73,18 @@ async def test_out_of_order_events_are_listed_chronologically(clients):
 
 
 @pytest.mark.asyncio
+async def test_get_event_by_id_returns_gateway_record(clients):
+    gateway_client, _, _ = clients
+
+    await gateway_client.post("/events", json=event_payload("evt-read"))
+    response = await gateway_client.get("/events/evt-read")
+
+    assert response.status_code == 200
+    assert response.json()["eventId"] == "evt-read"
+    assert response.json()["status"] == "APPLIED"
+
+
+@pytest.mark.asyncio
 async def test_debits_reduce_balance_regardless_of_arrival_order(clients):
     gateway_client, _, _ = clients
 
@@ -121,6 +133,24 @@ async def test_trace_id_is_propagated_to_account_service(clients):
     assert response.status_code == 201
     assert response.headers["X-Trace-Id"] == "trace-test-123"
     assert account_app.state.last_trace_id == "trace-test-123"
+
+
+@pytest.mark.asyncio
+async def test_account_service_returns_account_details(clients):
+    gateway_client, account_client, _ = clients
+
+    await gateway_client.post("/events", json=event_payload("evt-account-credit", "80.00"))
+    await gateway_client.post(
+        "/events",
+        json=event_payload("evt-account-debit", "15.50", event_type="DEBIT"),
+    )
+
+    response = await account_client.get("/accounts/acct-123")
+
+    assert response.status_code == 200
+    assert response.json()["accountId"] == "acct-123"
+    assert response.json()["balance"] == "64.50"
+    assert len(response.json()["recentTransactions"]) == 2
 
 
 @pytest.mark.asyncio

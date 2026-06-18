@@ -27,7 +27,7 @@ Account Service
 
 - **Idempotency:** `event_id` is the primary key in both services. Duplicate event submissions return the original event and do not apply the transaction again.
 - **Out-of-order events:** event queries are sorted by `event_timestamp`, not arrival time. Balance is computed from all applied credits and debits, so arrival order does not change correctness.
-- **Resiliency:** Gateway calls to Account Service use timeout plus bounded exponential backoff. If Account Service remains unavailable, Gateway returns `503 Service Unavailable` instead of hanging or returning an unhandled `500`.
+- **Resiliency:** Gateway calls to Account Service use **timeout + retry with bounded exponential backoff**. I chose this pattern over a circuit breaker because it is stateless, easy to reason about for this small synchronous system, and deterministic to test. Each downstream call has a short timeout and at most three attempts, so the Gateway fails fast instead of retrying indefinitely.
 - **Trace propagation:** Gateway creates or accepts an `X-Trace-Id` header and forwards it to Account Service. Both services include the trace ID in JSON logs.
 - **Observability:** both services expose `/health` and `/metrics`, and emit structured JSON logs.
 
@@ -90,18 +90,48 @@ uvicorn account_service.app.main:app --host 0.0.0.0 --port 8001
 
 Start Gateway in another terminal:
 
-```bash
-set ACCOUNT_SERVICE_URL=http://localhost:8001
+PowerShell:
+
+```powershell
+$env:ACCOUNT_SERVICE_URL = "http://localhost:8001"
 uvicorn gateway.app.main:app --host 0.0.0.0 --port 8000
+```
+
+macOS/Linux:
+
+```bash
+ACCOUNT_SERVICE_URL=http://localhost:8001 uvicorn gateway.app.main:app --host 0.0.0.0 --port 8000
 ```
 
 ## Example Request
 
+PowerShell:
+
+```powershell
+$body = @{
+  eventId = "evt-001"
+  accountId = "acct-123"
+  type = "CREDIT"
+  amount = 150.00
+  currency = "USD"
+  eventTimestamp = "2026-05-15T14:02:11Z"
+  metadata = @{ source = "mainframe-batch" }
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:8000/events" `
+  -Headers @{ "X-Trace-Id" = "demo-trace-001" } `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+macOS/Linux:
+
 ```bash
-curl -X POST http://localhost:8000/events ^
-  -H "Content-Type: application/json" ^
-  -H "X-Trace-Id: demo-trace-001" ^
-  -d "{\"eventId\":\"evt-001\",\"accountId\":\"acct-123\",\"type\":\"CREDIT\",\"amount\":150.00,\"currency\":\"USD\",\"eventTimestamp\":\"2026-05-15T14:02:11Z\",\"metadata\":{\"source\":\"mainframe-batch\"}}"
+curl -X POST http://localhost:8000/events \
+  -H "Content-Type: application/json" \
+  -H "X-Trace-Id: demo-trace-001" \
+  -d '{"eventId":"evt-001","accountId":"acct-123","type":"CREDIT","amount":150.00,"currency":"USD","eventTimestamp":"2026-05-15T14:02:11Z","metadata":{"source":"mainframe-batch"}}'
 ```
 
 ## Run Tests
