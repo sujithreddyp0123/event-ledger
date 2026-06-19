@@ -1,37 +1,38 @@
 # Event Ledger
 
-Two-service event ledger implementation for processing financial transaction events with idempotency, out-of-order tolerance, trace propagation, observability, and graceful downstream failure handling.
+Two-service FastAPI event ledger for processing financial transaction events with idempotency, out-of-order handling, trace propagation, resiliency, observability, and integration tests.
 
 ## Architecture
-
-The system has two independently runnable FastAPI services.
-
-- **Event Gateway API** runs on port `8000`. It validates client event submissions, enforces idempotency with a unique `event_id`, stores local event records, and calls the Account Service over REST.
-- **Account Service** runs on port `8001`. It owns account transaction state and computes balances from its own SQLite database.
-
-Each service uses its own SQLite database. They do not share in-process state or database tables.
 
 ```text
 Client
   |
   | REST
   v
-Event Gateway API
+Event Gateway API  :8000
   |
-  | REST with X-Trace-Id
+  | REST + X-Trace-Id
   v
-Account Service
+Account Service    :8001
 ```
 
-## Key Design Choices
+The services are independently runnable processes:
 
-- **Idempotency:** `event_id` is the primary key in both services. Duplicate event submissions return the original event and do not apply the transaction again.
-- **Out-of-order events:** event queries are sorted by `event_timestamp`, not arrival time. Balance is computed from all applied credits and debits, so arrival order does not change correctness.
-- **Resiliency:** Gateway calls to Account Service use **timeout + retry with bounded exponential backoff**. I chose this pattern over a circuit breaker because it is stateless, easy to reason about for this small synchronous system, and deterministic to test. Each downstream call has a short timeout and at most three attempts, so the Gateway fails fast instead of retrying indefinitely.
-- **Trace propagation:** Gateway creates or accepts an `X-Trace-Id` header and forwards it to Account Service. Both services include the trace ID in JSON logs.
-- **Observability:** both services expose `/health` and `/metrics`, and emit structured JSON logs.
+- **Event Gateway API** validates client events, stores event records, enforces idempotency, lists events by event timestamp, and calls the Account Service.
+- **Account Service** stores applied account transactions, computes balances, and returns account details.
 
-## Endpoints
+Each service owns its own SQLite database. They do not share tables, process memory, or repository objects.
+
+## Design Choices
+
+- **Idempotency:** `event_id` is the primary key in both services. A duplicate `eventId` returns the original record with `200 OK` and does not apply the transaction again.
+- **Out-of-order tolerance:** event listings sort by `eventTimestamp`, not arrival time. Balances are computed from all account transactions, so arrival order does not affect correctness.
+- **Money handling:** amounts are converted to integer cents before storage to avoid floating-point precision issues.
+- **Trace propagation:** Gateway accepts or generates `X-Trace-Id`, logs it, forwards it to Account Service, and returns it on the response.
+- **Resiliency:** Gateway uses timeout + retry with bounded exponential backoff for Account Service calls. I chose this over a circuit breaker because it is stateless, simple to reason about, and deterministic to test for this small synchronous system.
+- **Graceful degradation:** if Account Service is unavailable, `POST /events` returns `503` and removes the local pending event so a later retry is not incorrectly treated as a duplicate. Gateway-local event reads still work.
+
+## API
 
 Gateway:
 
@@ -60,25 +61,37 @@ GET /metrics
 docker compose up --build
 ```
 
-Gateway will be available at:
+Services:
 
 ```text
-http://localhost:8000
+Gateway:         http://localhost:8000
+Account Service: http://localhost:8001
+Swagger docs:    http://localhost:8000/docs and http://localhost:8001/docs
 ```
 
-Account Service will be available at:
+Stop:
 
-```text
-http://localhost:8001
+```bash
+docker compose down
 ```
 
 ## Run Locally
 
-Create and activate a virtual environment:
+Create a virtual environment and install dependencies.
+
+PowerShell:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+macOS/Linux:
 
 ```bash
 python -m venv .venv
-.venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -134,7 +147,27 @@ curl -X POST http://localhost:8000/events \
   -d '{"eventId":"evt-001","accountId":"acct-123","type":"CREDIT","amount":150.00,"currency":"USD","eventTimestamp":"2026-05-15T14:02:11Z","metadata":{"source":"mainframe-batch"}}'
 ```
 
-## Run Tests
+Useful follow-up calls:
+
+```bash
+curl "http://localhost:8000/events?account=acct-123"
+curl "http://localhost:8000/accounts/acct-123/balance"
+curl "http://localhost:8000/metrics"
+```
+
+## Observability
+
+Both services expose:
+
+- `GET /health` for service and database health
+- `GET /metrics` for simple JSON counters
+- JSON structured logs with timestamp, level, service name, message, and trace ID
+
+The metrics are intentionally lightweight for the exercise. A production version would likely use Prometheus and OpenTelemetry exporters.
+
+## Tests
+
+Run:
 
 ```bash
 pytest
@@ -143,13 +176,31 @@ pytest
 The test suite covers:
 
 - idempotency
-- out-of-order event listing
+- out-of-order event ordering
 - credit/debit balance computation
 - validation failures
+- `GET /events/{eventId}`
+- Account Service account details
 - trace propagation
-- Gateway behavior when Account Service is unavailable
+- Account Service outage behavior
 - full Gateway to Account Service integration flow
+
+The tests use `httpx.ASGITransport` to exercise the actual FastAPI apps without needing to start real network servers.
+
+## Project Structure
+
+```text
+account_service/
+  app/
+gateway/
+  app/
+tests/
+docker-compose.yml
+requirements.txt
+pytest.ini
+README.md
+```
 
 ## Tradeoffs
 
-This implementation keeps the exercise intentionally focused. In a production system, a durable outbox or queue would be a stronger pattern for accepting events while the Account Service is unavailable. Here, the Gateway returns `503` and does not retain unapplied events, which keeps the client contract clear and prevents partial idempotency state from blocking a later retry.
+This implementation keeps the scope focused for the take-home. When Account Service is down, the Gateway fails fast with `503` instead of accepting events into a queue. In production, I would consider a durable outbox or message queue, OpenTelemetry Collector with Jaeger or Zipkin, Prometheus metrics, and contract tests between services.
