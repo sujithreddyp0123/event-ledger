@@ -118,6 +118,15 @@ ACCOUNT_SERVICE_URL=http://localhost:8001 uvicorn gateway.app.main:app --host 0.
 
 ## Example Request
 
+macOS/Linux:
+
+```bash
+curl -X POST http://localhost:8000/events \
+  -H "Content-Type: application/json" \
+  -H "X-Trace-Id: demo-trace-001" \
+  -d '{"eventId":"evt-001","accountId":"acct-123","type":"CREDIT","amount":150.00,"currency":"USD","eventTimestamp":"2026-05-15T14:02:11Z","metadata":{"source":"mainframe-batch"}}'
+```
+
 PowerShell:
 
 ```powershell
@@ -136,15 +145,6 @@ Invoke-RestMethod -Method Post `
   -Headers @{ "X-Trace-Id" = "demo-trace-001" } `
   -ContentType "application/json" `
   -Body $body
-```
-
-macOS/Linux:
-
-```bash
-curl -X POST http://localhost:8000/events \
-  -H "Content-Type: application/json" \
-  -H "X-Trace-Id: demo-trace-001" \
-  -d '{"eventId":"evt-001","accountId":"acct-123","type":"CREDIT","amount":150.00,"currency":"USD","eventTimestamp":"2026-05-15T14:02:11Z","metadata":{"source":"mainframe-batch"}}'
 ```
 
 Useful follow-up calls:
